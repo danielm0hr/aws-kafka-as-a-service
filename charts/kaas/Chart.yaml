@@ -1,0 +1,16 @@
+apiVersion: v2
+name: kaas
+description: The default KaaS tenant cluster configuration
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+dependencies:
+  - name: strimzi/strimzi-kafka-operator
+    version: 0.21.1
+    repository: https://strimzi.io/charts/
+  - name: jetstack/cert-manager
+    version: v1.2.0
+    repository: https://charts.jetstack.io
+  - name: stable/external-dns
+    version: 2.20.4
+    repository: https://charts.bitnami.com/bitnami
