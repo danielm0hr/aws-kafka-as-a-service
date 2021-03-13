@@ -19,7 +19,8 @@ One additional design goal was to reduce the amount of custom code needed to pro
   - [Getting started](#getting-started)
     - [Prerequisites](#prerequisites)
     - [Create the management cluster](#create-the-management-cluster)
-    - [Create your first Kafka tenant](#create-your-first-kafka-tenant)
+    - [Prepare for creating tenant clusters](#prepare-for-creating-tenant-clusters)
+    - [Create a tenant cluster](#create-a-tenant-cluster)
 ## Design choices
 
 Which components are used and why.
@@ -78,17 +79,34 @@ First, the management Kubernetes cluster needs to be created. This is the cluste
       --managed
     ```
    and wait for it to be ready.
-4. In order to set the appropriate IAM configuration for Cluster API, run
+4. In order to set the appropriate IAM configuration for Cluster API, create a `bootstrap-config.yaml` file
     ```
-    clusterawsadm bootstrap iam create-cloudformation-stack
+    apiVersion: bootstrap.aws.infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: AWSIAMConfiguration
+    spec:
+    eks:
+        enable: true
+        iamRoleCreation: false
+        defaultControlPlaneRole:
+            disable: false
+        managedMachinePool:
+            disable: false
     ```
-5. Set an environment variable for putting the IAM credentials in a Kubernetes secret
+    and apply it with
     ```
+    clusterawsadm bootstrap iam create-cloudformation-stack --config bootstrap-config.yaml
+    ```
+5. Set some environment variables for enabling Cluster API EKS support and for putting the IAM credentials in a Kubernetes secret
+    ```
+    export EXP_EKS=true
+    export EXP_EKS_IAM=true
+    export EXP_EKS_ADD_ROLES=true
+
     export AWS_B64ENCODED_CREDENTIALS=$(clusterawsadm bootstrap credentials encode-as-profile)
     ```
 6. Initialize the AWS Cluster API provider on your management cluster
     ```
-    clusterctl init --infrastructure=aws
+    clusterctl init --infrastructure=aws --control-plane aws-eks --bootstrap aws-eks
     ```
 
 7. Install FluxCD to your management cluster and connect it to this Github repo (for other Git providers see the [FluxCD bootstrap docs](https://toolkit.fluxcd.io/guides/installation/#bootstrap))
@@ -104,20 +122,54 @@ First, the management Kubernetes cluster needs to be created. This is the cluste
     --personal
     ```
 
+### Prepare for creating tenant clusters
 
-### Create your first Kafka tenant
+Tenant clusters will use [`external-dns`](https://github.com/kubernetes-sigs/external-dns) for creating DNS endpoints in Route53. Create an IAM policy which allows access to your Route53 zone by creating a `policy.json` file
+    ```
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "route53:ChangeResourceRecordSets"
+          ],
+          "Resource": [
+            "arn:aws:route53:::hostedzone/<zone-id>"
+          ]
+        },
+        {
+          "Effect": "Allow",
+          "Action": [
+            "route53:ListHostedZones",
+            "route53:ListResourceRecordSets"
+          ],
+          "Resource": [
+            "*"
+          ]
+        }
+      ]
+    }
+    ```
+    and creating the policy with
+    ```
+    aws iam create-policy --policy-name k8s-ext-dns-route53 --policy-document file://policy.json
+    ```
+    For each tenant cluster we will then create an IAM role which has the above policy attached.
 
-1. Create your [Cluster API configuration](https://cluster-api.sigs.k8s.io/user/quick-start.html#required-configuration-for-common-providers) in `~/.cluster-api/clusterctl.yml` (adjust fields appropriately):
+### Create a tenant cluster
+
+1. Specify some further environment variables:
     ```
     export AWS_REGION=us-east-1
-    export AWS_SSH_KEY_NAME=default
-    # Select instance types
-    export AWS_CONTROL_PLANE_MACHINE_TYPE=t3.large
+    export AWS_SSH_KEY_NAME=<key>
     export AWS_NODE_MACHINE_TYPE=t3.large
     ```
-
-
-
+2. Create the tenant cluster configuration by running
+    ```
+    clusterctl config cluster <tenant-name> --flavor eks --kubernetes-version v1.19.7 --worker-machine-count=<worker-nodes> > tenant-cluster.yaml
+    ```
+    and put it into the GitOps repository to you pointed FluxCD above. See [`tenants/example-tenant01/example-tenant01.yaml`](tenants/example-tenant01/example-tenant01.yaml) for an example cluster configuration.
 
 
 
