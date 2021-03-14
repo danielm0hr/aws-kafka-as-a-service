@@ -2,11 +2,11 @@
 
 An example on how to run Apache Kafka as a SaaS product on AWS, focusing on a simple, scalable, secure, multi-tenant design which abstracts the complexities of running Kafka away from the user. An application developer shall be able to just point her Kafka producers and consumers to the KaaS service, providing only some basic preferences like desired throughput and data retention.
 
-From operations perspective, the goal is to be able to create appropriately scaled tenants in a fully automated way. This example implements [hard multi-tenancy](#hard-multi-tenancy) on runtime level by default. If you don't require hard multi-tenancy (and want to save some infrastructure costs), the provided scripts and resources can be adjusted relatively easily to fall back to Kubernetes namespace based tenant isolation instead. The needed changes are summarized in [Changes for Soft Multi-Tenancy](#changes-for-soft-multi-tenancy).
+From operations perspective, the goal is to be able to create appropriately scaled tenants in a fully automated way. This example implements [hard multi-tenancy](#hard-multi-tenancy) on runtime level by default. If you don't require hard multi-tenancy (and want to save some infrastructure costs), the provided resources can be adjusted relatively easily to fall back to Kubernetes namespace based tenant isolation instead. The needed changes are summarized in [Changes for Soft Multi-Tenancy](#changes-for-soft-multi-tenancy).
 
-This example can be easily ported to other cloud providers and bare-metal because only a few AWS-only components are used, which all have similar replacements on other providers. Please refer to the documentation of the individual components on how to change the configuration.
+This example can be easily ported to other cloud providers and even bare-metal because only a few AWS-only components are used, which all have similar replacements on other providers. Please refer to the documentation of the individual components on how to change the configuration.
 
-One additional design goal was to reduce the amount of custom code needed to provide a fully functional SaaS product to a minimum. It uses off-the-shelf components for solving many of the non-functional (security, scalability, operational efficiency, simplicity, ...) and functional (multi-tenant, full-fledged Apache Kafka service) requirements, which are non-differentiating for a theoretical business around that SaaS product. The business should be able to spend its efforts focusing on the differentiating parts of the product.
+One additional design goal was to reduce the amount of custom code needed to provide a fully functional SaaS product to a minimum. It uses off-the-shelf components for solving many of the non-functional (multi-tenancy, security, scalability, operational efficiency, simplicity, ...) and functional (the core Kafka service) requirements, which are non-differentiating for a theoretical business around that SaaS product. The business should be able to spend its efforts focusing on the differentiating parts of the product.
 
 ## Table of Contents
 - [Kafka as a Service (KaaS) on AWS](#kafka-as-a-service-kaas-on-aws)
@@ -21,13 +21,14 @@ One additional design goal was to reduce the amount of custom code needed to pro
     - [Create the management cluster](#create-the-management-cluster)
     - [Prepare for creating tenant clusters](#prepare-for-creating-tenant-clusters)
     - [Create a tenant cluster](#create-a-tenant-cluster)
+    - [Deploy the Kaas components](#deploy-the-kaas-components)
 ## Design choices
 
 Which components are used and why.
 
 ### Runtime Platform
 
-An obvious choice for the runtime platform is [**Kubernetes**](https://kubernetes.io/) because of its straight-forward sclability, reliability and security properties and because its the de-facto standard for container orchestration (yes, we use containers). Concretely, the AWS [**Elastic Kubernetes Service (EKS)**](https://aws.amazon.com/eks) is the Kubernetes distribution (managed through [Cluster API](https://cluster-api.sigs.k8s.io/)) of our choice, providing currently the simplest way of running production grade Kubernetes clusters on AWS.
+An obvious choice for the runtime platform is [**Kubernetes**](https://kubernetes.io/) because of its straight-forward sclability, reliability and security properties and because its the de-facto standard for container orchestration (yes, we use containers).
 
 ### Apache Kafka Distribution
 
@@ -64,7 +65,7 @@ How to get this example running yourself.
 
 ### Create the management cluster
 
-First, the management Kubernetes cluster needs to be created. This is the cluster which you mainly interact with directly and where the lifecycle of the tenant (workload) clusters will be managed.
+First, the management Kubernetes cluster needs to be created. This is the cluster which you mainly interact with directly and where the lifecycle of the tenant (workload) clusters will be managed. We use an EKS [Elastic Kubernetes Service (EKS)](https://aws.amazon.com/eks) cluster for that.
 
 1. Setup your AWS credentials using e.g. `aws configure`.
 2. [Import or create an SSH key pair for EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-key-pairs.html#prepare-key-pair)
@@ -79,34 +80,17 @@ First, the management Kubernetes cluster needs to be created. This is the cluste
       --managed
     ```
    and wait for it to be ready.
-4. In order to set the appropriate IAM configuration for Cluster API, create a `bootstrap-config.yaml` file
+4. In order to set the appropriate IAM configuration for Cluster API, run
     ```
-    apiVersion: bootstrap.aws.infrastructure.cluster.x-k8s.io/v1alpha1
-    kind: AWSIAMConfiguration
-    spec:
-    eks:
-        enable: true
-        iamRoleCreation: false
-        defaultControlPlaneRole:
-            disable: false
-        managedMachinePool:
-            disable: false
+    clusterawsadm bootstrap iam create-cloudformation-stack
     ```
-    and apply it with
+5. Set an environment variable for putting the IAM credentials in a Kubernetes secret
     ```
-    clusterawsadm bootstrap iam create-cloudformation-stack --config bootstrap-config.yaml
-    ```
-5. Set some environment variables for enabling Cluster API EKS support and for putting the IAM credentials in a Kubernetes secret
-    ```
-    export EXP_EKS=true
-    export EXP_EKS_IAM=true
-    export EXP_EKS_ADD_ROLES=true
-
     export AWS_B64ENCODED_CREDENTIALS=$(clusterawsadm bootstrap credentials encode-as-profile)
     ```
 6. Initialize the AWS Cluster API provider on your management cluster
     ```
-    clusterctl init --infrastructure=aws --control-plane aws-eks --bootstrap aws-eks
+    clusterctl init --infrastructure=aws
     ```
 
 7. Install FluxCD to your management cluster and connect it to this Github repo (for other Git providers see the [FluxCD bootstrap docs](https://toolkit.fluxcd.io/guides/installation/#bootstrap))
@@ -159,18 +143,52 @@ Tenant clusters will use [`external-dns`](https://github.com/kubernetes-sigs/ext
 
 ### Create a tenant cluster
 
-1. Specify some further environment variables:
+Creating the tenant cluster is a two step operation: First, the cluster is created by creating a `Cluster` configuration in the Flux repository. After the cluster is ready, the appropriate IAM policies for `external-dns` are created (the neccessary values are not known before cluster creation) and the tenant deployments are initiated by putting a `HelmRelease` resource into the Flux repository. The `HelmRelease` is using the `spec.kubeconfig` field for applying it to the newly created tenant cluster.
+
+1. Specify some further environment variables for `clusterctl`:
     ```
     export AWS_REGION=us-east-1
     export AWS_SSH_KEY_NAME=<key>
-    export AWS_NODE_MACHINE_TYPE=t3.large
+    export AWS_CONTROL_PLANE_MACHINE_TYPE=t3.large
+    export AWS_NODE_MACHINE_TYPE=r5.xlarge
     ```
+    Note: _r5.xlarge_ is the recommended AWS node type for Kafka clusters on AWS according to https://eventsizer.io/.
 2. Create the tenant cluster configuration by running
     ```
-    clusterctl config cluster <tenant-name> --flavor eks --kubernetes-version v1.19.7 --worker-machine-count=<worker-nodes> > tenant-cluster.yaml
+    clusterctl config cluster <tenant-name> --kubernetes-version v1.19.7 --worker-machine-count=<worker-nodes> > tenant-cluster.yaml
     ```
-    and put it into the GitOps repository to you pointed FluxCD above. See [`tenants/example-tenant01/example-tenant01.yaml`](tenants/example-tenant01/example-tenant01.yaml) for an example cluster configuration.
+    and put it into the GitOps repository to you pointed FluxCD above. See [`tenants/example-tenant01/example-tenant01.yaml`](tenants/example-tenant01/example-tenant01.yaml) for an example cluster configuration. Set `<worker-nodes>` to at least the number of nodes your Kafka cluster needs to fulfill your throughput requirements. Use e.g. https://eventsizer.io/ for determining the right number.
 
+    The FluxCD source controller will detect the `Cluster` resource in the repository and apply it to the management cluster. Cluster API will then create the tenant cluster according to the configuration.
+3. After the tenant cluster is up and running, create an IAM role for `external-dns` to be able to create DNS entries in Route53. Attach the policy you created above to that role following [these instructions](https://docs.aws.amazon.com/eks/latest/userguide/create-service-account-iam-policy-and-role.html#create-service-account-iam-role).
 
+### Deploy the Kaas components
 
-
+__Note: This is not implemented yet.__
+****
+1. Put a `HelmRelease` resource into the Flux repository, which installs the [`kaas`](charts/kaas) chart to the tenant cluster while providing appropriate values for sizing and naming. The [`kaas`](charts/kaas) aggregates all tenant cluster components (external-dns, cert-manager, the Kafka operator, the Kafka cluster resources, etc) into one central, versionable configuration which can be parametrized. The chart only surfaces the values, which need to be adjusted per tenant: The Kafka cluster sizing paramters and the users to create on the Kafka cluster.
+    ```
+    apiVersion: helm.toolkit.fluxcd.io/v2beta1
+    kind: HelmRelease
+    metadata:
+      name: example-cluster01
+      namespace: default
+    spec:
+      values:
+        kafkaNodes: <nodes>
+        kafkaStoragePerNode <storage>
+        kafkaUsers: [<users>]
+      kubeConfig:
+        secretRef:
+          name: example-tenant01-kubeconfig
+      chart:
+        spec:
+          chart: ./charts/kaas
+          version: "0.1.0"
+          sourceRef:
+            kind: GitRepository
+            name: kaas
+      install:
+        remediation:
+          retries: -1
+    ```

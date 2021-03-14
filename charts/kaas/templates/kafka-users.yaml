@@ -1,0 +1,13 @@
+# TODO: Implement KafkaUser resources
+
+# FOR user in kafkaUsers DO
+#
+# apiVersion: kafka.strimzi.io/v1beta2
+# kind: KafkaUser
+# metadata:
+#   name: user
+#   labels:
+#     strimzi.io/cluster: my-cluster
+# spec:
+#   authentication:
+#     type: tls
