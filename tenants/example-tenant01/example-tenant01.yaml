@@ -10,28 +10,64 @@ spec:
       - 192.168.0.0/16
   controlPlaneRef:
     apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
-    kind: AWSManagedControlPlane
+    kind: KubeadmControlPlane
     name: example-tenant01-control-plane
   infrastructureRef:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
-    kind: AWSManagedCluster
+    kind: AWSCluster
     name: example-tenant01
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
-kind: AWSManagedCluster
+kind: AWSCluster
 metadata:
   name: example-tenant01
   namespace: default
+spec:
+  region: us-east-1
+  sshKeyName: daniel
 ---
 apiVersion: controlplane.cluster.x-k8s.io/v1alpha3
-kind: AWSManagedControlPlane
+kind: KubeadmControlPlane
 metadata:
   name: example-tenant01-control-plane
   namespace: default
 spec:
-  region: us-east-1
-  sshKeyName: default
+  infrastructureTemplate:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
+    kind: AWSMachineTemplate
+    name: example-tenant01-control-plane
+  kubeadmConfigSpec:
+    clusterConfiguration:
+      apiServer:
+        extraArgs:
+          cloud-provider: aws
+      controllerManager:
+        extraArgs:
+          cloud-provider: aws
+    initConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: aws
+        name: '{{ ds.meta_data.local_hostname }}'
+    joinConfiguration:
+      nodeRegistration:
+        kubeletExtraArgs:
+          cloud-provider: aws
+        name: '{{ ds.meta_data.local_hostname }}'
+  replicas: 1
   version: v1.19.7
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha3
+kind: AWSMachineTemplate
+metadata:
+  name: example-tenant01-control-plane
+  namespace: default
+spec:
+  template:
+    spec:
+      iamInstanceProfile: control-plane.cluster-api-provider-aws.sigs.k8s.io
+      instanceType: t3.large
+      sshKeyName: daniel
 ---
 apiVersion: cluster.x-k8s.io/v1alpha3
 kind: MachineDeployment
@@ -48,7 +84,7 @@ spec:
       bootstrap:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
-          kind: EKSConfigTemplate
+          kind: KubeadmConfigTemplate
           name: example-tenant01-md-0
       clusterName: example-tenant01
       infrastructureRef:
@@ -67,12 +103,18 @@ spec:
     spec:
       iamInstanceProfile: nodes.cluster-api-provider-aws.sigs.k8s.io
       instanceType: t3.large
-      sshKeyName: default
+      sshKeyName: daniel
 ---
 apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
-kind: EKSConfigTemplate
+kind: KubeadmConfigTemplate
 metadata:
   name: example-tenant01-md-0
   namespace: default
 spec:
-  template: {}
+  template:
+    spec:
+      joinConfiguration:
+        nodeRegistration:
+          kubeletExtraArgs:
+            cloud-provider: aws
+          name: '{{ ds.meta_data.local_hostname }}'
