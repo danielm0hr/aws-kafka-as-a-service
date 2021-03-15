@@ -117,7 +117,7 @@ First, the management Kubernetes cluster needs to be created. This is the cluste
 
 7. Install FluxCD to your management cluster and connect it to this Github repo (for other Git providers see the [FluxCD bootstrap docs](https://toolkit.fluxcd.io/guides/installation/#bootstrap))
     ```
-    export GITHUB_USER=<username>
+    export GITHUB_USER=danielm0hr
     export GITHUB_TOKEN=<acces-token>
 
     flux bootstrap github \
@@ -131,7 +131,7 @@ First, the management Kubernetes cluster needs to be created. This is the cluste
 ### Prepare for creating tenant clusters
 
 Tenant clusters will use [`external-dns`](https://github.com/kubernetes-sigs/external-dns) for creating DNS endpoints in Route53. Create an IAM policy which allows access to your Route53 zone by creating a `policy.json` file
-    ```
+
     {
       "Version": "2012-10-17",
       "Statement": [
@@ -156,12 +156,12 @@ Tenant clusters will use [`external-dns`](https://github.com/kubernetes-sigs/ext
         }
       ]
     }
-    ```
-    and creating the policy with
-    ```
+
+and creating the policy with
+
     aws iam create-policy --policy-name k8s-ext-dns-route53 --policy-document file://policy.json
-    ```
-    For each tenant cluster we will then create an IAM role which has the above policy attached.
+
+For each tenant cluster we will then create an IAM role which has the above policy attached.
 
 ### Create a tenant cluster
 
@@ -179,7 +179,7 @@ Creating the tenant cluster is a two step operation: First, the cluster is creat
     ```
     clusterctl config cluster <tenant-name> --kubernetes-version v1.19.7 --worker-machine-count=<worker-nodes> > tenant-cluster.yaml
     ```
-    and put it into the GitOps repository to you pointed FluxCD above. See [`tenants/example-tenant01/example-tenant01.yaml`](tenants/example-tenant01/example-tenant01.yaml) for an example cluster configuration. Set `<worker-nodes>` to at least the number of nodes your Kafka cluster needs to fulfill your throughput requirements. Use e.g. https://eventsizer.io/ for determining the right number.
+    and put it into the GitOps repository to you pointed FluxCD above. See [`tenants/example-tenant01/example-tenant01.yaml`](tenants/example-tenant01/example-tenant01.yaml) for an example cluster configuration. Set `<worker-nodes>` to at least the number of nodes your Kafka cluster needs to fulfill your throughput requirements. Use e.g. https://eventsizer.io/ for determining the right number. When providing a self-service UI to the users the cluster size would need to be computed when requesting a new tenant based on the user input about desired throughput.
 
     The FluxCD source controller will detect the `Cluster` resource in the repository and apply it to the management cluster. Cluster API will then create the tenant cluster according to the configuration.
 3. After the tenant cluster is up and running, create an IAM role for `external-dns` to be able to create DNS entries in Route53. Attach the policy you created above to that role following [these instructions](https://docs.aws.amazon.com/eks/latest/userguide/create-service-account-iam-policy-and-role.html#create-service-account-iam-role).
@@ -187,8 +187,8 @@ Creating the tenant cluster is a two step operation: First, the cluster is creat
 ### Deploy the Kaas components
 
 __Note: This is not implemented yet.__
-****
-1. Put a `HelmRelease` resource into the Flux repository, which installs the [`kaas`](charts/kaas) chart to the tenant cluster while providing appropriate values for sizing and naming. The [`kaas`](charts/kaas) aggregates all tenant cluster components (external-dns, cert-manager, the Kafka operator, the Kafka cluster resources, etc) into one central, versionable configuration which can be parametrized. The chart only surfaces the values, which need to be adjusted per tenant: The Kafka cluster sizing paramters and the users to create on the Kafka cluster.
+
+1. Put a `HelmRelease` resource into the Flux repository, which installs the [`kaas`](charts/kaas) chart to the tenant cluster while providing appropriate values for sizing and naming. The [`kaas`](charts/kaas) chart aggregates all tenant cluster components (external-dns, cert-manager, the Kafka operator, the Kafka cluster resources, etc) into one central, versionable configuration which can be parametrized. The chart only surfaces the values, which need to be adjusted per tenant: The Kafka cluster sizing paramters and the users to create on the Kafka cluster. When providing self-service UI for tenant creation, the values for these parameters need to be calculated based on user input about desired throughput, data retention and user accounts. See [`tenants/example-tenant01/kaas.yaml`](tenants/example-tenant01/kaas.yaml) for an example.
     ```
     apiVersion: helm.toolkit.fluxcd.io/v2beta1
     kind: HelmRelease
